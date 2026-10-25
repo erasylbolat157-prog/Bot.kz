@@ -1,0 +1,242 @@
+
+import os
+from urllib.parse import quote_plus
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+# Учебный каталог. Ссылки ведут на поиск трейлеров
+# и поиск легальных вариантов просмотра.
+MOVIES = [
+    {
+        "id": "1",
+        "title": "Интерстеллар",
+        "year": 2014,
+        "genre": "Фантастика",
+        "description": "Путешествие через космос ради будущего человечества.",
+    },
+    {
+        "id": "2",
+        "title": "Начало",
+        "year": 2010,
+        "genre": "Фантастика",
+        "description": "Команда проникает в чужие сны.",
+    },
+    {
+        "id": "3",
+        "title": "Гарри Поттер",
+        "year": 2001,
+        "genre": "Фэнтези",
+        "description": "Начало истории юного волшебника.",
+    },
+    {
+        "id": "4",
+        "title": "Король Лев",
+        "year": 1994,
+        "genre": "Мультфильм",
+        "description": "История Симбы и его пути к взрослению.",
+    },
+    {
+        "id": "5",
+        "title": "Побег из Шоушенка",
+        "year": 1994,
+        "genre": "Драма",
+        "description": "История надежды и свободы.",
+    },
+    {
+        "id": "6",
+        "title": "Человек-паук",
+        "year": 2002,
+        "genre": "Боевик",
+        "description": "История героя, который защищает свой город.",
+    },
+]
+
+
+def main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Каталог", callback_data="catalog")],
+        [InlineKeyboardButton("🔎 Поиск", callback_data="search")],
+        [InlineKeyboardButton("🍿 Жанры", callback_data="genres")],
+    ])
+
+
+def movie_buttons(movie):
+    query = quote_plus(movie["title"])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "▶️ Найти трейлер",
+            url=f"https://www.youtube.com/results?search_query={query}+trailer"
+        )],
+        [InlineKeyboardButton(
+            "📺 Где посмотреть",
+            url=f"https://www.justwatch.com/us/search?q={query}"
+        )],
+        [InlineKeyboardButton("⬅️ В меню", callback_data="home")],
+    ])
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["searching"] = False
+    await update.message.reply_text(
+        "🎬 Добро пожаловать в Cinema World!\n\n"
+        "Выбирай фильм, ищи по названию или открывай жанры.",
+        reply_markup=main_menu(),
+    )
+
+
+async def show_catalog(query):
+    buttons = [
+        [InlineKeyboardButton(
+            f"🎞️ {m['title']} ({m['year']})",
+            callback_data=f"movie:{m['id']}"
+        )]
+        for m in MOVIES
+    ]
+    buttons.append([
+        InlineKeyboardButton("⬅️ В меню", callback_data="home")
+    ])
+    await query.edit_message_text(
+        "🎬 Каталог фильмов:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def show_genres(query):
+    genres = sorted(set(m["genre"] for m in MOVIES))
+    buttons = [
+        [InlineKeyboardButton(g, callback_data=f"genre:{g}")]
+        for g in genres
+    ]
+    buttons.append([
+        InlineKeyboardButton("⬅️ В меню", callback_data="home")
+    ])
+    await query.edit_message_text(
+        "🍿 Выбери жанр:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def button_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "home":
+        context.user_data["searching"] = False
+        await query.edit_message_text(
+            "🎬 Cinema World — главное меню",
+            reply_markup=main_menu(),
+        )
+
+    elif data == "catalog":
+        await show_catalog(query)
+
+    elif data == "genres":
+        await show_genres(query)
+
+    elif data == "search":
+        context.user_data["searching"] = True
+        await query.edit_message_text(
+            "🔎 Напиши название фильма сообщением.\n"
+            "Например: Интерстеллар"
+        )
+
+    elif data.startswith("movie:"):
+        movie_id = data.split(":", 1)[1]
+        movie = next(
+            (m for m in MOVIES if m["id"] == movie_id), None
+        )
+        if movie:
+            await query.edit_message_text(
+                f"🎬 {movie['title']} ({movie['year']})\n"
+                f"Жанр: {movie['genre']}\n\n"
+                f"{movie['description']}",
+                reply_markup=movie_buttons(movie),
+            )
+
+    elif data.startswith("genre:"):
+        genre = data.split(":", 1)[1]
+        matches = [m for m in MOVIES if m["genre"] == genre]
+        buttons = [
+            [InlineKeyboardButton(
+                m["title"], callback_data=f"movie:{m['id']}"
+            )]
+            for m in matches
+        ]
+        buttons.append([
+            InlineKeyboardButton("⬅️ К жанрам", callback_data="genres")
+        ])
+        await query.edit_message_text(
+            f"🍿 Жанр: {genre}",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+
+async def search_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    if not context.user_data.get("searching"):
+        return
+
+    text = update.message.text.strip().casefold()
+    results = [
+        m for m in MOVIES
+        if text in m["title"].casefold()
+    ]
+
+    context.user_data["searching"] = False
+
+    if not results:
+        await update.message.reply_text(
+            "😕 Ничего не найдено. Попробуй другое название.",
+            reply_markup=main_menu(),
+        )
+        return
+
+    buttons = [
+        [InlineKeyboardButton(
+            f"{m['title']} ({m['year']})",
+            callback_data=f"movie:{m['id']}"
+        )]
+        for m in results
+    ]
+    await update.message.reply_text(
+        "🔎 Результаты поиска:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+def main():
+    token = os.environ.get("BOT_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "Сначала задай переменную окружения BOT_TOKEN"
+        )
+
+    app = Application.builder().token(token).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND, search_handler
+    ))
+
+    print("Бот запущен!")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
